@@ -1,0 +1,77 @@
+#!/bin/bash
+
+#########################################
+# CONFIGURATION
+#########################################
+
+MAIL_TO="admin@company.com"
+MAIL_FROM="k8s-monitor@company.com"
+SUBJECT_PREFIX="[K8S ALERT]"
+LOG_FILE="/var/log/k8s-health.log"
+
+DATE=$(date '+%Y-%m-%d %H:%M:%S')
+HOST=$(hostname)
+
+ALERT=0
+MESSAGE=""
+
+#########################################
+# FUNCTIONS
+#########################################
+
+log() {
+  echo "[$DATE] $1" | tee -a $LOG_FILE
+}
+
+add_alert() {
+  MESSAGE+="$1\n"
+  ALERT=1
+}
+
+send_mail() {
+  echo -e "$MESSAGE" | mail -s "$SUBJECT_PREFIX Incident on $HOST" $MAIL_TO
+}
+
+#########################################
+# CHECKS
+#########################################
+
+log "===== Kubernetes Health Check ====="
+
+# 1. Nodes NotReady
+NOT_READY=$(kubectl get nodes --no-headers 2>/dev/null | awk '$2 != "Ready"')
+
+if [[ ! -z "$NOT_READY" ]]; then
+  log "❌ Node NotReady detected"
+  add_alert "Node NotReady:\n$NOT_READY\n"
+fi
+
+# 2. Pods en erreur
+BAD_PODS=$(kubectl get pods -A --no-headers 2>/dev/null | grep -E "CrashLoopBackOff|Error")
+
+if [[ ! -z "$BAD_PODS" ]]; then
+  log "❌ Pods en erreur détectés"
+  add_alert "Pods en erreur:\n$BAD_PODS\n"
+fi
+
+# 3. API Server check
+kubectl get ns > /dev/null 2>&1
+if [[ $? -ne 0 ]]; then
+  log "❌ API Server unreachable"
+  add_alert "API Server unreachable\n"
+fi
+
+#########################################
+# RESULT
+#########################################
+
+if [[ $ALERT -eq 1 ]]; then
+  log "🚨 INCIDENT DETECTED"
+
+  MESSAGE="Kubernetes Incident detected\n\nHost: $HOST\nDate: $DATE\n\n$MESSAGE"
+
+  send_mail
+
+else
+  log "✅ Cluster OK"
+fi
