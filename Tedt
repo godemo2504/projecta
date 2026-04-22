@@ -1,0 +1,133 @@
+🧾 1. Script principal (health check cluster)
+👉 Script Bash global à exécuter sur un node (ou via SSH sur les 3)
+Bash
+#!/bin/bash
+
+echo "===== PROXMOX CLUSTER HEALTH ====="
+date
+
+echo -e "\n--- Cluster Status ---"
+pvecm status
+
+echo -e "\n--- Nodes Status ---"
+pvecm nodes
+
+echo -e "\n--- HA Status ---"
+ha-manager status
+
+echo -e "\n--- VM Status ---"
+qm list
+
+echo -e "\n--- Resources ---"
+echo "CPU Load:"
+uptime
+
+echo -e "\nMemory:"
+free -h
+
+echo -e "\nDisk:"
+df -h
+
+echo -e "\n--- Corosync ---"
+systemctl status corosync | grep Active
+
+echo -e "\n--- pve-cluster ---"
+systemctl status pve-cluster | grep Active
+
+echo "=================================="
+👉 Rendre exécutable :
+Bash
+chmod +x cluster-health.sh
+🚨 2. Script avec alerting (email / Slack possible)
+👉 Version intelligente (détection anomalies)
+Bash
+#!/bin/bash
+
+ALERT=0
+
+echo "Checking cluster..."
+
+# Vérifier quorum
+QUORUM=$(pvecm status | grep "Quorate" | awk '{print $2}')
+if [[ "$QUORUM" != "Yes" ]]; then
+  echo "❌ NO QUORUM!"
+  ALERT=1
+fi
+
+# Vérifier nodes offline
+OFFLINE=$(pvecm nodes | grep offline)
+if [[ ! -z "$OFFLINE" ]]; then
+  echo "❌ Node offline detected"
+  echo "$OFFLINE"
+  ALERT=1
+fi
+
+# Vérifier HA erreurs
+HA_ERR=$(ha-manager status | grep error)
+if [[ ! -z "$HA_ERR" ]]; then
+  echo "❌ HA ERROR"
+  echo "$HA_ERR"
+  ALERT=1
+fi
+
+# Vérifier VM stoppées (optionnel)
+STOPPED_VM=$(qm list | grep stopped)
+if [[ ! -z "$STOPPED_VM" ]]; then
+  echo "⚠️ VM stopped"
+  echo "$STOPPED_VM"
+fi
+
+# Résultat
+if [[ $ALERT -eq 1 ]]; then
+  echo "🚨 INCIDENT DETECTED"
+  # Exemple mail
+  # echo "Cluster issue" | mail -s "ALERT PROXMOX" admin@mail.com
+
+  # Exemple Slack webhook
+  # curl -X POST -H 'Content-type: application/json' \
+  # --data '{"text":"Proxmox ALERT"}' https://hooks.slack.com/services/XXX
+else
+  echo "✅ Cluster OK"
+fi
+📡 3. Script supervision multi-nodes (SSH)
+👉 Pour checker les 3 hyperviseurs depuis un seul point
+Bash
+#!/bin/bash
+
+NODES=("node1" "node2" "node3")
+
+for NODE in "${NODES[@]}"; do
+  echo "===== $NODE ====="
+  ssh root@$NODE "
+    hostname;
+    uptime;
+    pvecm status | grep Quorate;
+    systemctl is-active corosync;
+    systemctl is-active pve-cluster;
+  "
+done
+📊 4. Script orienté métriques (Prometheus friendly)
+👉 Export simple en texte (pour scraping)
+Bash
+#!/bin/bash
+
+echo "# HELP proxmox_node_up Node status"
+echo "# TYPE proxmox_node_up gauge"
+
+if systemctl is-active --quiet pve-cluster; then
+  echo "proxmox_node_up 1"
+else
+  echo "proxmox_node_up 0"
+fi
+
+LOAD=$(uptime | awk '{print $10}' | sed 's/,//')
+echo "proxmox_cpu_load $LOAD"
+
+MEM=$(free | grep Mem | awk '{print $3/$2 * 100.0}')
+echo "proxmox_memory_usage $MEM"
+⏱️ 5. Automatisation (cron)
+👉 Exécuter toutes les 5 min :
+Bash
+crontab -e
+Bash
+*/5 * * * * /root/cluster-health.sh >> /var/log/proxmox-health.log
