@@ -234,3 +234,130 @@ done
 ip -s link | grep -A5 "eth"
 
 echo "================================"
+
+
+🖥️ 1. Script supervision des VM (Proxmox)
+👉 À lancer sur un node Proxmox :
+Bash
+#!/bin/bash
+
+echo "===== VM CHECK ====="
+
+qm list | while read line; do
+  VMID=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $3}')
+
+  if [[ "$VMID" != "VMID" ]]; then
+    if [[ "$STATUS" != "running" ]]; then
+      echo "❌ VM $VMID is STOPPED"
+    else
+      echo "✅ VM $VMID running"
+    fi
+  fi
+done
+🔐 2. Script SSH sur toutes les VM Kubernetes
+👉 Tu supervises directement les nodes K8s :
+Bash
+#!/bin/bash
+
+NODES=("k8s-master1" "k8s-worker1" "k8s-worker2")
+
+for NODE in "${NODES[@]}"; do
+  echo "===== $NODE ====="
+
+  ssh $NODE "
+    echo 'Node status:'
+    uptime
+
+    echo 'Kubelet:'
+    systemctl is-active kubelet
+
+    echo 'Docker/containerd:'
+    systemctl is-active containerd
+
+    echo 'Disk:'
+    df -h /
+
+    echo 'Memory:'
+    free -h
+  "
+done
+☸️ 3. Script supervision Kubernetes (cluster)
+👉 Depuis un master (ou bastion avec kubeconfig)
+Bash
+#!/bin/bash
+
+echo "===== KUBERNETES HEALTH ====="
+
+echo -e "\n--- Nodes ---"
+kubectl get nodes
+
+echo -e "\n--- Pods (non healthy) ---"
+kubectl get pods -A | grep -v Running | grep -v Completed
+
+echo -e "\n--- Events ---"
+kubectl get events -A --sort-by='.metadata.creationTimestamp' | tail -20
+
+echo -e "\n--- API Server ---"
+kubectl cluster-info
+
+echo -e "\n--- Top Nodes ---"
+kubectl top nodes
+
+echo -e "\n--- Top Pods ---"
+kubectl top pods -A | head -20
+🚨 4. Script alerte Kubernetes (critique)
+Bash
+#!/bin/bash
+
+ALERT=0
+
+# Nodes not ready
+NOT_READY=$(kubectl get nodes | grep -v Ready)
+if [[ ! -z "$NOT_READY" ]]; then
+  echo "❌ Node NotReady"
+  echo "$NOT_READY"
+  ALERT=1
+fi
+
+# Pods en erreur
+BAD_PODS=$(kubectl get pods -A | grep -E "CrashLoopBackOff|Error")
+if [[ ! -z "$BAD_PODS" ]]; then
+  echo "❌ Pods en erreur"
+  echo "$BAD_PODS"
+  ALERT=1
+fi
+
+# API server check
+kubectl get ns > /dev/null 2>&1
+if [[ $? -ne 0 ]]; then
+  echo "❌ API Server unreachable"
+  ALERT=1
+fi
+
+if [[ $ALERT -eq 1 ]]; then
+  echo "🚨 INCIDENT KUBERNETES"
+fi
+🔗 5. Script global (FULL STACK)
+👉 Combine tout (Proxmox + VM + K8s)
+Bash
+#!/bin/bash
+
+echo "===== FULL STACK HEALTH ====="
+
+# 1. Cluster Proxmox
+echo -e "\n[Proxmox Cluster]"
+pvecm status | grep Quorate
+
+# 2. VM
+echo -e "\n[VM Status]"
+qm list
+
+# 3. Kubernetes
+echo -e "\n[Kubernetes Nodes]"
+kubectl get nodes
+
+echo -e "\n[Kubernetes Pods Issues]"
+kubectl get pods -A | grep -E "CrashLoopBackOff|Error"
+
+echo "================================"
