@@ -131,3 +131,106 @@ Bash
 crontab -e
 Bash
 */5 * * * * /root/cluster-health.sh >> /var/log/proxmox-health.log
+
+
+
+⚙️ 2. Script Linux (sans iDRAC)
+👉 Script complet de health physique :
+Bash
+#!/bin/bash
+
+echo "===== HARDWARE HEALTH ====="
+
+echo -e "\n--- CPU Temp ---"
+sensors
+
+echo -e "\n--- Memory Errors ---"
+dmesg | grep -i ecc
+
+echo -e "\n--- Disk Health ---"
+for disk in /dev/sd?; do
+  echo "Disk: $disk"
+  smartctl -H $disk
+done
+
+echo -e "\n--- RAID Status ---"
+# MegaRAID
+megacli -LDInfo -Lall -aALL 2>/dev/null
+
+# HP Smart Array
+hpacucli ctrl all show status 2>/dev/null
+
+echo -e "\n--- Network Errors ---"
+ip -s link
+
+echo -e "\n--- PSU / Fans (if supported) ---"
+ipmitool sensor
+
+echo "================================"
+👉 Packages à installer :
+Bash
+apt install lm-sensors smartmontools ipmitool
+💾 3. Surveillance des disques (très critique)
+👉 SMART check rapide :
+Bash
+smartctl -a /dev/sda
+👉 Script alerte disque :
+Bash
+#!/bin/bash
+
+for disk in /dev/sd?; do
+  STATUS=$(smartctl -H $disk | grep "PASSED")
+  if [[ -z "$STATUS" ]]; then
+    echo "❌ Disk failure on $disk"
+  fi
+done
+🌐 4. Réseau physique (cluster = critique)
+👉 Vérifier erreurs réseau :
+Bash
+ip -s link
+👉 Détecter perte de paquets entre nodes :
+Bash
+ping -c 5 node2
+👉 Script check réseau cluster :
+Bash
+#!/bin/bash
+
+NODES=("node1" "node2" "node3")
+
+for NODE in "${NODES[@]}"; do
+  ping -c 2 $NODE > /dev/null
+  if [[ $? -ne 0 ]]; then
+    echo "❌ Network issue with $NODE"
+  else
+    echo "✅ $NODE reachable"
+  fi
+done
+🔋 5. Alimentation (souvent oublié)
+👉 Via IPMI :
+Bash
+ipmitool sensor | grep -i power
+👉 À surveiller :
+PSU redundancy lost
+Voltage anomalies
+🚨 6. Script global (physique + cluster)
+👉 Script “niveau prod” combiné :
+Bash
+#!/bin/bash
+
+echo "===== FULL HEALTH CHECK ====="
+
+# Cluster
+pvecm status | grep Quorate
+
+# Hardware
+ipmitool sensor | grep -E "Temp|Fan|Power"
+
+# Disks
+for disk in /dev/sd?; do
+  smartctl -H $disk | grep -v PASSED && echo "Disk issue $disk"
+done
+
+# Network
+ip -s link | grep -A5 "eth"
+
+echo "================================"
